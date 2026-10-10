@@ -49,7 +49,7 @@ textarea { min-height: 84px; resize: vertical; }
 .top .logo { color: #fff; font-size: 19px; flex: 1; }
 .top .who { font-size: 13px; opacity: .85; text-align: right; line-height: 1.2; }
 .icon-btn { border: 0; background: rgba(255,255,255,.14); color: #fff; border-radius: 10px; min-width: 40px; height: 40px; font-size: 18px; }
-.top select { width: auto; max-width: 140px; padding: 7px 10px; border-radius: 10px; border: 0; font-size: 14px; }
+.top select { width: auto; max-width: 140px; padding: 7px 10px; border-radius: 10px; border: 0; font-size: 14px; color: var(--text); background: #fff; }
 .tabs { display: flex; gap: 4px; padding: 0 10px 8px; max-width: 980px; margin: 0 auto; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { flex: 0 0 auto; border: 0; background: transparent; color: rgba(255,255,255,.75); padding: 8px 12px; border-radius: 10px; font-weight: 600; font-size: 15px; }
