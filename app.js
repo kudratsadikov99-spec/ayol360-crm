@@ -18,8 +18,31 @@
   var LOGIN_DOMAIN = "@ayol360.uz";
 
   var cfg = window.AYOL360_CONFIG || {};
+  // Phones with a wrong clock see every token as already expired and refresh in a loop until
+  // Supabase rate-limits them and the session ends. Store expiry relative to THIS device's clock.
+  var clockSkew = 0;
+  function jwtPayload(t) {
+    var b = t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (b.length % 4) b += "=";
+    return JSON.parse(atob(b));
+  }
+  var authStorage = {
+    getItem: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    setItem: function (k, v) {
+      try {
+        var o = JSON.parse(v);
+        if (o && o.access_token) {
+          var p = jwtPayload(o.access_token);
+          var now = Math.floor(Date.now() / 1000);
+          if (p.iat && p.exp) { clockSkew = now - p.iat; o.expires_at = now + (p.exp - p.iat); v = JSON.stringify(o); }
+        }
+      } catch (e) { /* keep value as is */ }
+      try { localStorage.setItem(k, v); } catch (e) { /* private mode */ }
+    },
+    removeItem: function (k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }
+  };
   var sb = window.supabase.createClient(cfg.url, cfg.anonKey, {
-    auth: { persistSession: true, autoRefreshToken: true, storageKey: "ayol360-crm-auth" }
+    auth: { persistSession: true, autoRefreshToken: true, storageKey: "ayol360-crm-auth", storage: authStorage }
   });
 
   var me = null;                 // profile row
@@ -138,6 +161,7 @@
       return renderLogin(p.error ? "Ma’lumotni olib bo‘lmadi: " + errText(p.error) : "Akkauntingiz hali faollashtirilmagan. Administratorga murojaat qiling.");
     }
     me = p.data;
+    if (Math.abs(clockSkew) > 300) setTimeout(function () { toast("Telefon soati noto‘g‘ri. Sozlamalarda avtomatik vaqtni yoqing."); }, 800);
     loadUi();
     var o = await sb.from("offices").select("*").order("id");
     offices = o.data || [];
