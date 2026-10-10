@@ -129,12 +129,13 @@
   }
 
   async function enter() {
-    var uid = (await sb.auth.getUser()).data.user;
+    var sess = (await sb.auth.getSession()).data.session;
+    var uid = sess && sess.user;
     if (!uid) return renderLogin();
     var p = await sb.from("profiles").select("*").eq("id", uid.id).single();
     if (p.error || !p.data || !p.data.active || !p.data.role) {
-      await sb.auth.signOut();
-      return renderLogin("Akkauntingiz hali faollashtirilmagan. Administratorga murojaat qiling.");
+      await sb.auth.signOut({ scope: "local" });
+      return renderLogin(p.error ? "Ma’lumotni olib bo‘lmadi: " + errText(p.error) : "Akkauntingiz hali faollashtirilmagan. Administratorga murojaat qiling.");
     }
     me = p.data;
     loadUi();
@@ -221,9 +222,18 @@
     renderTab(false);
   }
 
+  function resetState() {
+    me = null; staff = []; ui = {}; counts = {};
+    list = { rows: [], done: false, loading: false, selecting: false, selected: {} };
+    var s = document.querySelector(".sheet"); if (s) s.remove();
+    var b = document.querySelector(".bar"); if (b) b.remove();
+    document.body.style.overflow = "";
+  }
+
   async function logout() {
-    await sb.auth.signOut();
-    me = null; staff = [];
+    // "local": only this device logs out; other devices of the same account stay signed in
+    await sb.auth.signOut({ scope: "local" });
+    resetState();
     renderLogin();
   }
 
@@ -338,7 +348,11 @@
     var want = keepScroll && list.rows.length ? Math.max(PAGE, list.rows.length) : (keepScroll && restoreScroll ? PAGE * 3 : PAGE);
     var r = await fetchPage(0, want - 1);
     list.loading = false;
-    if (r.error) return fail(r.error);
+    if (r.error) {
+      fail(r.error);
+      if (listEl && listEl.isConnected) clear(listEl).appendChild(h("div", { class: "empty", text: "Lidlarni yuklab bo‘lmadi: " + errText(r.error) }));
+      return;
+    }
     list.rows = r.data;
     list.done = r.data.length < want;
     drawList();
@@ -907,8 +921,15 @@
       restoreScroll = window.scrollY; reloadLeads(true);
     }
   });
-  sb.auth.onAuthStateChange(function (ev) {
-    if (ev === "SIGNED_OUT" && me) { me = null; renderLogin(); }
+  sb.auth.onAuthStateChange(function (ev, session) {
+    if (!me) return;
+    if (ev === "SIGNED_OUT" || !session) {
+      resetState();
+      renderLogin("Sessiya tugadi. Iltimos, qayta kiring.");
+      return;
+    }
+    // Another tab signed in with a different account: reload so this tab shows that account correctly
+    if (session.user && session.user.id !== me.id) location.reload();
   });
 
   boot().catch(function (e) { console.error(e); clear(app).appendChild(h("div", { class: "boot", text: "Xato: " + errText(e) })); });
