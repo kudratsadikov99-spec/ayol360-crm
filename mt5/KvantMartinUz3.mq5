@@ -27,7 +27,8 @@ enum ENUM_REJIM
    REJIM_CUSTOM       = 0, // Custom: quyidagi qiymatlar
    REJIM_CONSERVATIVE = 1, // 1 - Conservative
    REJIM_BALANCED     = 2, // 2 - Balanced
-   REJIM_AGGRESSIVE   = 3  // 3 - Aggressive Scalping
+   REJIM_AGGRESSIVE   = 3, // 3 - Aggressive Scalping
+   REJIM_SIGNAL_TEST  = 4  // 4 - Signal testi (martingeylsiz, add-on siz)
   };
 
 enum ENUM_LOT_MODE
@@ -433,6 +434,14 @@ void RejimniQollash()
          S.martin = true;     S.seriesRisk = 10.0; S.mult = 1.3; S.maxSteps = 3;
          S.dynGrid = true;    S.gridATR = 1.0;   S.minStepSec = 120;
          break;
+      case REJIM_SIGNAL_TEST:
+         // Balanced signali, lekin martingeyl va add-on o'chiq: signalning o'z sifatini tekshirish uchun
+         S.tf = PERIOD_M5;    S.adxTrend = 22.0; S.pullbackATR = 0.5; S.rsiBuy = 35.0; S.rsiSell = 65.0;
+         S.maxEntriesPerBar = 1; S.tpATR = 0.6; S.basketTPKoef = 1.0; S.reEntryCooldown = 120;
+         S.multiple = false;  S.maxPerSymbol = 2; S.maxTotal = 4;
+         S.martin = false;    S.seriesRisk = 2.0; S.mult = 1.0; S.maxSteps = 0;
+         S.dynGrid = true;    S.gridATR = 1.2;   S.minStepSec = 300;
+         break;
       default:
          break;
      }
@@ -445,6 +454,7 @@ string RejimNomi()
       case REJIM_CONSERVATIVE: return "Conservative";
       case REJIM_BALANCED:     return "Balanced";
       case REJIM_AGGRESSIVE:   return "Aggressive";
+      case REJIM_SIGNAL_TEST:  return "Signal testi";
      }
    return "Custom";
   }
