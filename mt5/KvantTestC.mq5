@@ -721,6 +721,8 @@ bool Yopish(const ulong ticket, const string sabab)
          return true;
       bool ok = g_trade.PositionClose(ticket, (ulong)MaxSlippagePoints);
       uint rc = g_trade.ResultRetcode();
+      if(rc == TRADE_RETCODE_POSITION_CLOSED)
+         return true;   // shu payt server SL yoki boshqa yopish ulgurgan
       if(ok && (rc == TRADE_RETCODE_DONE || rc == TRADE_RETCODE_DONE_PARTIAL || rc == TRADE_RETCODE_PLACED))
         {
          PrintFormat("Pozitsiya #%I64u yopildi. Sabab: %s", ticket, sabab);
