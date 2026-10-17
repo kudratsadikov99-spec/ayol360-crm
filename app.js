@@ -119,6 +119,12 @@
     return "Ofis " + id;
   }
   function isAdmin() { return me && (me.role === "admin" || me.role === "super"); }
+  // "Toshkent — admin: Dilnoza": leads moved to a branch land in its admin's "Taqsimlanmagan" pool
+  function officeWithAdmin(id) {
+    var names = staff.filter(function (s) { return s.role === "admin" && s.active && s.office_id === id; })
+      .map(function (s) { return s.full_name || s.email; });
+    return officeName(id) + " — " + (names.length ? "admin: " + names.join(", ") : "admini yo‘q");
+  }
   function activeOffice() { return me.role === "super" ? (ui.office || null) : me.office_id; }
   function managersOf(officeId) {
     return staff.filter(function (s) {
@@ -169,6 +175,11 @@
     var o = await sb.from("offices").select("*").order("id");
     offices = o.data || [];
     await loadStaff();
+    // a branch used by staff but missing from (or hidden in) "offices" must still be selectable
+    staff.concat([me]).forEach(function (s) {
+      if (s.office_id != null && !offices.some(function (x) { return x.id === s.office_id; })) offices.push({ id: s.office_id, name: "Ofis " + s.office_id });
+    });
+    offices.sort(function (a, b) { return a.id - b.id; });
     renderShell();
   }
 
@@ -208,7 +219,9 @@
   var mainEl, topEl;
   function tabsFor() {
     var t = [["leads", "Lidlar"]];
-    if (isAdmin()) t.push(["recycle", "Qayta ishlash"], ["import", "Yuklash"], ["staff", "Xodimlar"]);
+    if (isAdmin()) t.push(["recycle", "Qayta ishlash"]);
+    if (me.role === "super" && offices.length > 1) t.push(["transfer", "O‘tkazish"]);
+    if (isAdmin()) t.push(["import", "Yuklash"], ["staff", "Xodimlar"]);
     t.push(["stats", "Statistika"]);
     return t;
   }
@@ -268,6 +281,7 @@
     var bar = document.querySelector(".bar"); if (bar) bar.remove();
     clear(mainEl);
     if (ui.tab === "recycle" && isAdmin()) return renderRecycle();
+    if (ui.tab === "transfer" && me.role === "super") return renderTransfer();
     if (ui.tab === "import" && isAdmin()) return renderImport();
     if (ui.tab === "staff" && isAdmin()) return renderStaff();
     if (ui.tab === "stats") return renderStats();
@@ -461,7 +475,7 @@
       }),
       h("div", { class: "grow", text: n + " ta tanlandi" }),
       ui.stage === FREE ? null : h("button", { class: "btn line", text: "Qaytarish", disabled: !n, onclick: returnSelected }),
-      me.role === "super" && offices.length > 1 ? h("button", { class: "btn line", text: "Ofisga", disabled: !n, onclick: openMoveOffice }) : null,
+      me.role === "super" && offices.length > 1 ? h("button", { class: "btn line", text: "Filialga", disabled: !n, onclick: openMoveOffice }) : null,
       h("button", { class: "btn", text: "Menejerga berish", disabled: !n, onclick: openDistribute })));
     // the bar may wrap to two rows on phones: keep the last lead visible above it
     if (mainEl) mainEl.style.paddingBottom = (bar.offsetHeight + 16) + "px";
@@ -472,16 +486,16 @@
     var ids = Object.keys(list.selected).map(Number);
     var from = {};
     list.rows.forEach(function (r) { if (list.selected[r.id]) from[r.office_id] = true; });
-    var offSel = h("select", null, offices.map(function (o) { return h("option", { value: o.id, text: o.name }); }));
+    var offSel = h("select", null, offices.map(function (o) { return h("option", { value: o.id, text: officeWithAdmin(o.id) }); }));
     var others = offices.filter(function (o) { return !from[o.id]; });
     if (others.length) offSel.value = others[0].id;
     var asNew = h("input", { type: "checkbox", checked: true });
     var err = h("div", { class: "err" });
     modal(function (close) {
       return [
-        h("h2", { text: ids.length + " ta lidni boshqa ofisga o‘tkazish" }),
-        h("p", { class: "hint", text: "Lidlar menejerdan olinadi va tanlangan ofisning \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi." }),
-        h("label", { text: "Qaysi ofisga" }), offSel,
+        h("h2", { text: ids.length + " ta lidni boshqa filialga o‘tkazish" }),
+        h("p", { class: "hint", text: "Lidlar menejerdan olinadi va tanlangan filial adminining \"Taqsimlanmagan\" bo‘limiga tushadi. Admin ularni o‘z menejerlariga taqsimlaydi. Izoh va tarix saqlanadi." }),
+        h("label", { text: "Qaysi filial adminiga" }), offSel,
         h("div", { class: "picker" }, h("label", null, asNew, "\"Yangi lid\" bosqichiga o‘tkazish")),
         err,
         h("div", { class: "row" },
@@ -494,7 +508,7 @@
                 for (var i = 0; i < list.rows.length; i++) if (list.rows[i].id === id) return list.rows[i].office_id !== to;
                 return true;
               });
-              if (!move.length) { err.textContent = "Tanlangan lidlar allaqachon shu ofisda"; return; }
+              if (!move.length) { err.textContent = "Tanlangan lidlar allaqachon shu filialda"; return; }
               var fields = { office_id: to, manager_id: null };
               if (asNew.checked) { fields.stage = "new"; fields.next_call_at = null; }
               e.target.disabled = true;
@@ -505,7 +519,7 @@
                 done += r.data.length;
               }
               close();
-              toast(done + " ta lid " + officeName(to) + " ofisiga o‘tkazildi");
+              toast(done + " ta lid " + officeName(to) + " filialiga o‘tkazildi");
               list.selecting = false; list.selected = {};
               renderTab(false);
             }
@@ -805,10 +819,6 @@
         (office == null ? " · " + officeName(m.office_id) : "")) };
     });
     var daysInp = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0 — hammasi", oninput: debounce(refresh, 400) });
-    // super admin may send the returned leads to another office's pool
-    var toOffSel = me.role === "super" && offices.length > 1 ? h("select", null,
-      h("option", { value: "", text: "O‘z ofisida qoladi" }),
-      offices.map(function (o) { return h("option", { value: o.id, text: o.name + " ofisiga o‘tkazish" }); })) : null;
     var countEl = h("p", { class: "hint" });
     var err = h("div", { class: "err" });
     var expBtn = h("button", { class: "btn ghost block", text: "Excel’ga yuklab olish", onclick: doExport });
@@ -887,16 +897,10 @@
     function askMove() {
       var c = chosen(); if (invalid(c)) return;
       var mErr = h("div", { class: "err" });
-      var fields = Object.assign({}, BACK_TO_POOL);
-      var where = "\"Taqsimlanmagan\" bo‘limiga tushadi";
-      if (toOffSel && toOffSel.value) {
-        fields.office_id = Number(toOffSel.value);
-        where = officeName(fields.office_id) + " ofisining \"Taqsimlanmagan\" bo‘limiga tushadi";
-      }
       modal(function (close) {
         return [
           h("h2", { text: "Yangi lid qilib qaytarish" }),
-          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi, \"Yangi lid\" bosqichiga o‘tadi va " + where + ". Izoh va tarix saqlanadi. Keyin \"Lidlar → Taqsimlanmagan → Tanlash\" orqali qayta taqsimlaysiz." }),
+          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi, \"Yangi lid\" bosqichiga o‘tadi va \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi. Keyin \"Lidlar → Taqsimlanmagan → Tanlash\" orqali qayta taqsimlaysiz." }),
           mErr,
           h("div", { class: "row" },
             h("button", { class: "btn line", text: "Bekor", onclick: close }),
@@ -904,10 +908,10 @@
               class: "btn", text: "Ha, qaytarish",
               onclick: async function (e) {
                 e.target.disabled = true;
-                var r = await apply(sb.from("leads").update(fields), c).select("id");
+                var r = await apply(sb.from("leads").update(BACK_TO_POOL), c).select("id");
                 if (r.error) { mErr.textContent = errText(r.error); e.target.disabled = false; return; }
                 close();
-                toast(r.data.length + " ta lid " + (fields.office_id ? officeName(fields.office_id) + " ofisiga o‘tkazildi" : "\"Taqsimlanmagan\"ga qaytarildi"));
+                toast(r.data.length + " ta lid \"Taqsimlanmagan\"ga qaytarildi");
                 refresh();
               }
             }))
@@ -923,8 +927,114 @@
       h("label", { text: "Menejerlar" }),
       h("div", { class: "picker" }, h("label", null, allCb, h("b", { text: "Barcha menejerlar" })), mgrBoxes.map(function (b) { return b.el; })),
       h("label", { text: "Necha kundan beri o‘zgarmagan (ixtiyoriy)" }), daysInp,
-      toOffSel ? [h("label", { text: "Qaytarilgan lidlar qayerga tushsin" }), toOffSel] : null,
       countEl, err, expBtn, moveBtn));
+    refresh();
+  }
+
+  // ---------------- transfer (super admin): one branch's leads to another branch's admin ----------------
+  function renderTransfer() {
+    function offOptions(first) {
+      return [h("option", { value: "", text: first })].concat(offices.map(function (o) {
+        return h("option", { value: o.id, text: officeWithAdmin(o.id) });
+      }));
+    }
+    var fromSel = h("select", { onchange: refresh }, offOptions("— filialni tanlang —"));
+    if (ui.office) fromSel.value = ui.office;
+    var toSel = h("select", { onchange: refresh }, offOptions("— filialni tanlang —"));
+    // FREE = leads without a manager; the rest are stages. All pre-checked: "every row" of the branch.
+    var boxes = [FREE].concat(STAGES.map(function (s) { return s[0]; })).map(function (k) {
+      var cb = h("input", { type: "checkbox", value: k, checked: true, onchange: function () { allCb.checked = boxes.every(function (b) { return b.cb.checked; }); refresh(); } });
+      return { cb: cb, el: h("label", null, cb, k === FREE ? "Taqsimlanmagan (menejersiz)" : STAGE_NAME[k]) };
+    });
+    var allCb = h("input", {
+      type: "checkbox", checked: true,
+      onchange: function () { boxes.forEach(function (b) { b.cb.checked = allCb.checked; }); refresh(); }
+    });
+    var asNew = h("input", { type: "checkbox", checked: true });
+    var countEl = h("p", { class: "hint" });
+    var err = h("div", { class: "err" });
+    var btn = h("button", { class: "btn block", text: "O‘tkazish", onclick: ask });
+
+    function chosen() {
+      return {
+        from: fromSel.value ? Number(fromSel.value) : null,
+        to: toSel.value ? Number(toSel.value) : null,
+        keys: boxes.filter(function (b) { return b.cb.checked; }).map(function (b) { return b.cb.value; }),
+        all: allCb.checked
+      };
+    }
+    function invalid(c) {
+      if (c.from == null) return "Qaysi filialdan o‘tkazishni tanlang";
+      if (!c.keys.length) return "Kamida bitta qatorni tanlang";
+      if (c.to == null) return "Qaysi filial adminiga o‘tkazishni tanlang";
+      if (c.to === c.from) return "Boshqa filialni tanlang";
+      return "";
+    }
+    function apply(q, c) {
+      q = q.eq("office_id", c.from);
+      if (c.all) return q;
+      var stages = c.keys.filter(function (k) { return k !== FREE; });
+      if (c.keys.indexOf(FREE) < 0) return q.in("stage", stages);
+      // chosen stages OR any lead without a manager
+      return q.or((stages.length ? "stage.in.(" + stages.join(",") + ")," : "") + "manager_id.is.null");
+    }
+
+    var seq = 0;
+    async function refresh() {
+      var c = chosen(), my = ++seq;
+      btn.disabled = true;
+      clear(countEl);
+      err.textContent = "";
+      if (c.from == null || !c.keys.length) { err.textContent = invalid(c); return; }
+      countEl.textContent = "Hisoblanmoqda…";
+      var r = await apply(sb.from("leads").select("id", { count: "exact", head: true }), c);
+      if (my !== seq) return;
+      clear(countEl);
+      if (r.error) { err.textContent = errText(r.error); return; }
+      countEl.appendChild(h("b", { text: (r.count || 0) + " ta lid" }));
+      countEl.appendChild(document.createTextNode(" " + officeName(c.from) + " filialida tanlangan qatorlarda"));
+      err.textContent = invalid(c);
+      btn.disabled = !r.count || !!invalid(c);
+    }
+
+    function ask() {
+      var c = chosen(); if (invalid(c)) return;
+      var fields = { office_id: c.to, manager_id: null };
+      if (asNew.checked) { fields.stage = "new"; fields.next_call_at = null; }
+      var mErr = h("div", { class: "err" });
+      modal(function (close) {
+        return [
+          h("h2", { text: "Filialga o‘tkazish" }),
+          h("p", { class: "hint", text: countEl.textContent + ". Ular " + officeName(c.from) + " menejerlaridan olinib, " +
+            officeWithAdmin(c.to) + " — \"Taqsimlanmagan\" bo‘limiga tushadi" + (asNew.checked ? " va \"Yangi lid\" bo‘ladi" : ", bosqichi o‘zgarmaydi") +
+            ". Izoh va tarix saqlanadi." }),
+          mErr,
+          h("div", { class: "row" },
+            h("button", { class: "btn line", text: "Bekor", onclick: close }),
+            h("button", {
+              class: "btn", text: "Ha, o‘tkazish",
+              onclick: async function (e) {
+                e.target.disabled = true;
+                var r = await apply(sb.from("leads").update(fields), c).select("id");
+                if (r.error) { mErr.textContent = errText(r.error); e.target.disabled = false; return; }
+                close();
+                toast(r.data.length + " ta lid " + officeName(c.to) + " filialiga o‘tkazildi");
+                refresh();
+              }
+            }))
+        ];
+      });
+    }
+
+    mainEl.appendChild(h("div", { class: "box" },
+      h("h3", { text: "Filialdan filialga o‘tkazish" }),
+      h("p", { class: "hint", text: "Bir filialdagi lidlarni boshqa filial adminiga o‘tkazing. Lidlar o‘sha adminning \"Taqsimlanmagan\" bo‘limiga tushadi va u ularni o‘z menejerlariga taqsimlaydi." }),
+      h("label", { text: "Qaysi filialdan" }), fromSel,
+      h("label", { text: "Qaysi qatorlar" }),
+      h("div", { class: "picker" }, h("label", null, allCb, h("b", { text: "Barcha qatorlar" })), boxes.map(function (b) { return b.el; })),
+      h("label", { text: "Qaysi filial adminiga" }), toSel,
+      h("div", { class: "picker" }, h("label", null, asNew, "\"Yangi lid\" qilib o‘tkazish (belgini olsangiz, bosqichi saqlanadi)")),
+      countEl, err, btn));
     refresh();
   }
 
