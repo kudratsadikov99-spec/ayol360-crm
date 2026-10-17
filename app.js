@@ -13,7 +13,8 @@
   ];
   var STAGE_NAME = {};
   STAGES.forEach(function (s) { STAGE_NAME[s[0]] = s[1]; });
-  var FREE = "_free";            // admin-only chip: leads without a manager
+  var FREE = "_free";            // former "Taqsimlanmagan" chip; only kept to migrate saved UI state
+  var NO_MGR = "_none";          // manager filter: leads without a manager (they are always "Yangi lid")
   var RECYCLE_STAGES = ["no_answer", "thinking"];   // pre-checked on the "Qayta ishlash" tab
   var BACK_TO_POOL = { stage: "new", manager_id: null, next_call_at: null };
   var XLSX_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
@@ -119,7 +120,7 @@
     return "Ofis " + id;
   }
   function isAdmin() { return me && (me.role === "admin" || me.role === "super"); }
-  // "Toshkent — admin: Dilnoza": leads moved to a branch land in its admin's "Taqsimlanmagan" pool
+  // "Toshkent — admin: Dilnoza": leads moved to a branch land in its admin's "Yangi lid" without a manager
   function officeWithAdmin(id) {
     var names = staff.filter(function (s) { return s.role === "admin" && s.active && s.office_id === id; })
       .map(function (s) { return s.full_name || s.email; });
@@ -137,8 +138,8 @@
   function loadUi() {
     try { ui = JSON.parse(localStorage.getItem(stateKey()) || "{}") || {}; } catch (e) { ui = {}; }
     if (!ui.tab) ui.tab = "leads";
-    if (!ui.stage) ui.stage = isAdmin() ? FREE : "new";
-    if (!isAdmin() && ui.stage === FREE) ui.stage = "new";
+    if (!ui.stage || ui.stage === FREE) ui.stage = "new";
+    if (!isAdmin() && ui.mgr) ui.mgr = "";
     if (!isAdmin() && ui.tab !== "leads" && ui.tab !== "stats") ui.tab = "leads";
   }
   var saveTimer;
@@ -292,16 +293,13 @@
   // ---------------- leads ----------------
   var listEl, chipsEl, searchEl, mgrSel, moreBtn;
 
-  function chipKeys() {
-    var k = STAGES.map(function (s) { return s[0]; });
-    return isAdmin() ? [FREE].concat(k) : k;
-  }
-  function chipLabel(k) { return k === FREE ? "Taqsimlanmagan" : STAGE_NAME[k]; }
+  function chipKeys() { return STAGES.map(function (s) { return s[0]; }); }
+  function chipLabel(k) { return STAGE_NAME[k]; }
 
   function baseQuery(q, forCount) {
     var off = activeOffice();
     if (off != null) q = q.eq("office_id", off);
-    if (isAdmin() && ui.mgr) q = q.eq("manager_id", ui.mgr);
+    if (isAdmin() && ui.mgr) q = ui.mgr === NO_MGR ? q.is("manager_id", null) : q.eq("manager_id", ui.mgr);
     var s = (ui.q || "").trim();
     if (s) {
       var safe = s.replace(/[,()%*\\]/g, " ").trim();
@@ -312,10 +310,7 @@
     }
     return q;
   }
-  function stageFilter(q, k) {
-    if (k === FREE) return q.is("manager_id", null);
-    return q.eq("stage", k);
-  }
+  function stageFilter(q, k) { return q.eq("stage", k); }
 
   function renderLeads(reset) {
     if (reset) { list.rows = []; list.done = false; list.selected = {}; }
@@ -329,6 +324,7 @@
       mgrSel = h("select", {
         onchange: function () { ui.mgr = mgrSel.value; ui.scrollY = 0; saveUi(); reloadLeads(); }
       }, h("option", { value: "", text: "Barcha menejerlar" }),
+        h("option", { value: NO_MGR, text: "Menejersiz (taqsimlanmagan)" }),
         managersOf(activeOffice()).map(function (m) { return h("option", { value: m.id, text: m.full_name || m.email }); }));
       mgrSel.value = ui.mgr || "";
       if (mgrSel.value !== (ui.mgr || "")) { ui.mgr = ""; }
@@ -379,7 +375,7 @@
   async function fetchPage(from, to) {
     var q = baseQuery(sb.from("leads").select("id,name,phone,stage,next_call_at,manager_id,office_id,updated_at,created_at"));
     if (!(ui.q || "").trim()) q = stageFilter(q, ui.stage);
-    if (ui.stage === "new" || ui.stage === FREE) q = q.order("created_at", { ascending: false });
+    if (ui.stage === "new") q = q.order("created_at", { ascending: false });
     else q = q.order("next_call_at", { ascending: true, nullsFirst: false }).order("updated_at", { ascending: false });
     return q.range(from, to);
   }
@@ -430,7 +426,7 @@
         var cls = t < now ? "late" : (t - now < 3 * 3600e3 ? "soon" : "");
         meta.push(h("span", { class: cls, text: "📅 " + fmtDate(r.next_call_at) }));
       }
-      if (searching || ui.stage === FREE) meta.push(STAGE_NAME[r.stage]);
+      if (searching) meta.push(STAGE_NAME[r.stage]);
       if (isAdmin()) meta.push(r.manager_id ? staffName(r.manager_id) : "menejersiz");
       if (me.role === "super" && activeOffice() == null) meta.push(officeName(r.office_id));
       meta = meta.reduce(function (acc, m, i) { if (i) acc.push(" · "); acc.push(m); return acc; }, []);
@@ -474,14 +470,14 @@
         onclick: function () { list.rows.forEach(function (r) { list.selected[r.id] = true; }); drawList(); }
       }),
       h("div", { class: "grow", text: n + " ta tanlandi" }),
-      ui.stage === FREE ? null : h("button", { class: "btn line", text: "Qaytarish", disabled: !n, onclick: returnSelected }),
+      ui.mgr === NO_MGR ? null : h("button", { class: "btn line", text: "Qaytarish", disabled: !n, onclick: returnSelected }),
       me.role === "super" && offices.length > 1 ? h("button", { class: "btn line", text: "Filialga", disabled: !n, onclick: openMoveOffice }) : null,
       h("button", { class: "btn", text: "Menejerga berish", disabled: !n, onclick: openDistribute })));
     // the bar may wrap to two rows on phones: keep the last lead visible above it
     if (mainEl) mainEl.style.paddingBottom = (bar.offsetHeight + 16) + "px";
   }
 
-  // Super admin: move selected leads to another office's pool ("Taqsimlanmagan"); note and history are kept.
+  // Super admin: move selected leads to another branch as new leads without a manager; note and history are kept.
   function openMoveOffice() {
     var ids = Object.keys(list.selected).map(Number);
     var from = {};
@@ -489,14 +485,12 @@
     var offSel = h("select", null, offices.map(function (o) { return h("option", { value: o.id, text: officeWithAdmin(o.id) }); }));
     var others = offices.filter(function (o) { return !from[o.id]; });
     if (others.length) offSel.value = others[0].id;
-    var asNew = h("input", { type: "checkbox", checked: true });
     var err = h("div", { class: "err" });
     modal(function (close) {
       return [
         h("h2", { text: ids.length + " ta lidni boshqa filialga o‘tkazish" }),
-        h("p", { class: "hint", text: "Lidlar menejerdan olinadi va tanlangan filial adminining \"Taqsimlanmagan\" bo‘limiga tushadi. Admin ularni o‘z menejerlariga taqsimlaydi. Izoh va tarix saqlanadi." }),
+        h("p", { class: "hint", text: "Lidlar menejerdan olinadi va tanlangan filial adminining \"Yangi lid\" bo‘limiga menejersiz tushadi. Admin ularni o‘z menejerlariga taqsimlaydi. Izoh va tarix saqlanadi." }),
         h("label", { text: "Qaysi filial adminiga" }), offSel,
-        h("div", { class: "picker" }, h("label", null, asNew, "\"Yangi lid\" bosqichiga o‘tkazish")),
         err,
         h("div", { class: "row" },
           h("button", { class: "btn line", text: "Bekor", onclick: close }),
@@ -509,8 +503,7 @@
                 return true;
               });
               if (!move.length) { err.textContent = "Tanlangan lidlar allaqachon shu filialda"; return; }
-              var fields = { office_id: to, manager_id: null };
-              if (asNew.checked) { fields.stage = "new"; fields.next_call_at = null; }
+              var fields = Object.assign({ office_id: to }, BACK_TO_POOL);
               e.target.disabled = true;
               var done = 0;
               for (var i = 0; i < move.length; i += 200) {
@@ -528,14 +521,14 @@
     });
   }
 
-  // Selected leads go back to the admin pool ("Taqsimlanmagan") as new leads; note and history are kept.
+  // Selected leads go back to the admin as new leads without a manager; note and history are kept.
   function returnSelected() {
     var ids = Object.keys(list.selected).map(Number);
     var err = h("div", { class: "err" });
     modal(function (close) {
       return [
         h("h2", { text: ids.length + " ta lidni qaytarish" }),
-        h("p", { class: "hint", text: "Tanlangan lidlar menejerdan olinadi, \"Yangi lid\" bosqichiga o‘tadi va \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi." }),
+        h("p", { class: "hint", text: "Tanlangan lidlar menejerdan olinadi va \"Yangi lid\" bo‘limiga menejersiz qaytadi. Izoh va tarix saqlanadi." }),
         err,
         h("div", { class: "row" },
           h("button", { class: "btn line", text: "Bekor", onclick: close }),
@@ -621,8 +614,8 @@
   function patchRow(lead) {
     for (var i = 0; i < list.rows.length; i++) {
       if (list.rows[i].id === lead.id) {
-        var moved = !(ui.q || "").trim() && ui.stage !== FREE && lead.stage !== ui.stage;
-        if (ui.stage === FREE && lead.manager_id) moved = true;
+        var moved = !(ui.q || "").trim() && lead.stage !== ui.stage;
+        if (ui.mgr === NO_MGR && lead.manager_id) moved = true;
         if (moved) list.rows.splice(i, 1); else list.rows[i] = Object.assign(list.rows[i], lead);
         break;
       }
@@ -710,6 +703,8 @@
             onclick: async function () {
               var f = { manager_id: mSel.value || null };
               if (oSel && Number(oSel.value) !== lead.office_id) { f.office_id = Number(oSel.value); f.manager_id = null; }
+              // a lead without a manager is always a new lead, so the admin finds it under "Yangi lid"
+              if (!f.manager_id && lead.manager_id && lead.stage !== "new") { f.stage = "new"; f.next_call_at = null; }
               var ok = await save(lead, f, "Saqlandi");
               if (ok) drawSheet(lead);
             }
@@ -900,7 +895,7 @@
       modal(function (close) {
         return [
           h("h2", { text: "Yangi lid qilib qaytarish" }),
-          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi, \"Yangi lid\" bosqichiga o‘tadi va \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi. Keyin \"Lidlar → Taqsimlanmagan → Tanlash\" orqali qayta taqsimlaysiz." }),
+          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi va \"Yangi lid\" bo‘limiga menejersiz qaytadi. Izoh va tarix saqlanadi. Keyin \"Lidlar → Yangi lid → Menejersiz → Tanlash\" orqali qayta taqsimlaysiz." }),
           mErr,
           h("div", { class: "row" },
             h("button", { class: "btn line", text: "Bekor", onclick: close }),
@@ -911,7 +906,7 @@
                 var r = await apply(sb.from("leads").update(BACK_TO_POOL), c).select("id");
                 if (r.error) { mErr.textContent = errText(r.error); e.target.disabled = false; return; }
                 close();
-                toast(r.data.length + " ta lid \"Taqsimlanmagan\"ga qaytarildi");
+                toast(r.data.length + " ta lid \"Yangi lid\"ga qaytarildi");
                 refresh();
               }
             }))
@@ -921,7 +916,7 @@
 
     mainEl.appendChild(h("div", { class: "box" },
       h("h3", { text: "Qayta ishlash" }),
-      h("p", { class: "hint", text: "Menejerlarda qolib ketgan lidlarni Excel’ga yuklab oling yoki to‘g‘ridan-to‘g‘ri \"Taqsimlanmagan\" bo‘limiga yangi lid qilib qaytaring." }),
+      h("p", { class: "hint", text: "Menejerlarda qolib ketgan lidlarni Excel’ga yuklab oling yoki to‘g‘ridan-to‘g‘ri \"Yangi lid\" bo‘limiga menejersiz qaytaring." }),
       h("label", { text: "Bosqichlar" }),
       h("div", { class: "picker" }, stageBoxes.map(function (b) { return b.el; })),
       h("label", { text: "Menejerlar" }),
@@ -941,16 +936,15 @@
     var fromSel = h("select", { onchange: refresh }, offOptions("— filialni tanlang —"));
     if (ui.office) fromSel.value = ui.office;
     var toSel = h("select", { onchange: refresh }, offOptions("— filialni tanlang —"));
-    // FREE = leads without a manager; the rest are stages. All pre-checked: "every row" of the branch.
-    var boxes = [FREE].concat(STAGES.map(function (s) { return s[0]; })).map(function (k) {
-      var cb = h("input", { type: "checkbox", value: k, checked: true, onchange: function () { allCb.checked = boxes.every(function (b) { return b.cb.checked; }); refresh(); } });
-      return { cb: cb, el: h("label", null, cb, k === FREE ? "Taqsimlanmagan (menejersiz)" : STAGE_NAME[k]) };
+    // all stages pre-checked: "every row" of the branch (leads without a manager are in "Yangi lid")
+    var boxes = STAGES.map(function (s) {
+      var cb = h("input", { type: "checkbox", value: s[0], checked: true, onchange: function () { allCb.checked = boxes.every(function (b) { return b.cb.checked; }); refresh(); } });
+      return { cb: cb, el: h("label", null, cb, s[1]) };
     });
     var allCb = h("input", {
       type: "checkbox", checked: true,
       onchange: function () { boxes.forEach(function (b) { b.cb.checked = allCb.checked; }); refresh(); }
     });
-    var asNew = h("input", { type: "checkbox", checked: true });
     var countEl = h("p", { class: "hint" });
     var err = h("div", { class: "err" });
     var btn = h("button", { class: "btn block", text: "O‘tkazish", onclick: ask });
@@ -972,11 +966,7 @@
     }
     function apply(q, c) {
       q = q.eq("office_id", c.from);
-      if (c.all) return q;
-      var stages = c.keys.filter(function (k) { return k !== FREE; });
-      if (c.keys.indexOf(FREE) < 0) return q.in("stage", stages);
-      // chosen stages OR any lead without a manager
-      return q.or((stages.length ? "stage.in.(" + stages.join(",") + ")," : "") + "manager_id.is.null");
+      return c.all ? q : q.in("stage", c.keys);
     }
 
     var seq = 0;
@@ -999,15 +989,13 @@
 
     function ask() {
       var c = chosen(); if (invalid(c)) return;
-      var fields = { office_id: c.to, manager_id: null };
-      if (asNew.checked) { fields.stage = "new"; fields.next_call_at = null; }
+      var fields = Object.assign({ office_id: c.to }, BACK_TO_POOL);
       var mErr = h("div", { class: "err" });
       modal(function (close) {
         return [
           h("h2", { text: "Filialga o‘tkazish" }),
           h("p", { class: "hint", text: countEl.textContent + ". Ular " + officeName(c.from) + " menejerlaridan olinib, " +
-            officeWithAdmin(c.to) + " — \"Taqsimlanmagan\" bo‘limiga tushadi" + (asNew.checked ? " va \"Yangi lid\" bo‘ladi" : ", bosqichi o‘zgarmaydi") +
-            ". Izoh va tarix saqlanadi." }),
+            officeWithAdmin(c.to) + " — \"Yangi lid\" bo‘limiga menejersiz tushadi. Izoh va tarix saqlanadi." }),
           mErr,
           h("div", { class: "row" },
             h("button", { class: "btn line", text: "Bekor", onclick: close }),
@@ -1028,12 +1016,11 @@
 
     mainEl.appendChild(h("div", { class: "box" },
       h("h3", { text: "Filialdan filialga o‘tkazish" }),
-      h("p", { class: "hint", text: "Bir filialdagi lidlarni boshqa filial adminiga o‘tkazing. Lidlar o‘sha adminning \"Taqsimlanmagan\" bo‘limiga tushadi va u ularni o‘z menejerlariga taqsimlaydi." }),
+      h("p", { class: "hint", text: "Bir filialdagi lidlarni boshqa filial adminiga o‘tkazing. Lidlar o‘sha adminning \"Yangi lid\" bo‘limiga menejersiz tushadi va u ularni o‘z menejerlariga taqsimlaydi." }),
       h("label", { text: "Qaysi filialdan" }), fromSel,
       h("label", { text: "Qaysi qatorlar" }),
       h("div", { class: "picker" }, h("label", null, allCb, h("b", { text: "Barcha qatorlar" })), boxes.map(function (b) { return b.el; })),
       h("label", { text: "Qaysi filial adminiga" }), toSel,
-      h("div", { class: "picker" }, h("label", null, asNew, "\"Yangi lid\" qilib o‘tkazish (belgini olsangiz, bosqichi saqlanadi)")),
       countEl, err, btn));
     refresh();
   }
@@ -1051,7 +1038,7 @@
     var out = h("div");
     mainEl.appendChild(h("div", { class: "box" },
       h("h3", { text: "Lid yuklash (Excel yoki CSV)" }),
-      h("p", { class: "hint", text: "Fayl ichida ism va telefon ustuni bo‘lsin. Takroriy raqamlar o‘tkazib yuboriladi. Yuklangan lidlar \"Taqsimlanmagan\" bo‘limiga tushadi." }),
+      h("p", { class: "hint", text: "Fayl ichida ism va telefon ustuni bo‘lsin. Takroriy raqamlar o‘tkazib yuboriladi. Yuklangan lidlar \"Yangi lid\" bo‘limiga menejersiz tushadi." }),
       offSel ? [h("label", { text: "Qaysi ofisga" }), offSel] : null,
       h("label", { text: "Manba" }), source,
       h("label", { text: "Fayl" }), file,
