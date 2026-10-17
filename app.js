@@ -451,16 +451,67 @@
 
   function drawBar() {
     var old = document.querySelector(".bar"); if (old) old.remove();
+    if (mainEl) mainEl.style.paddingBottom = "";
     if (!list.selecting) return;
     var n = Object.keys(list.selected).length;
-    document.body.appendChild(h("div", { class: "bar" },
+    var bar = document.body.appendChild(h("div", { class: "bar", style: "flex-wrap:wrap" },
       h("button", {
         class: "btn line", text: "Hammasi",
         onclick: function () { list.rows.forEach(function (r) { list.selected[r.id] = true; }); drawList(); }
       }),
       h("div", { class: "grow", text: n + " ta tanlandi" }),
       ui.stage === FREE ? null : h("button", { class: "btn line", text: "Qaytarish", disabled: !n, onclick: returnSelected }),
+      me.role === "super" && offices.length > 1 ? h("button", { class: "btn line", text: "Ofisga", disabled: !n, onclick: openMoveOffice }) : null,
       h("button", { class: "btn", text: "Menejerga berish", disabled: !n, onclick: openDistribute })));
+    // the bar may wrap to two rows on phones: keep the last lead visible above it
+    if (mainEl) mainEl.style.paddingBottom = (bar.offsetHeight + 16) + "px";
+  }
+
+  // Super admin: move selected leads to another office's pool ("Taqsimlanmagan"); note and history are kept.
+  function openMoveOffice() {
+    var ids = Object.keys(list.selected).map(Number);
+    var from = {};
+    list.rows.forEach(function (r) { if (list.selected[r.id]) from[r.office_id] = true; });
+    var offSel = h("select", null, offices.map(function (o) { return h("option", { value: o.id, text: o.name }); }));
+    var others = offices.filter(function (o) { return !from[o.id]; });
+    if (others.length) offSel.value = others[0].id;
+    var asNew = h("input", { type: "checkbox", checked: true });
+    var err = h("div", { class: "err" });
+    modal(function (close) {
+      return [
+        h("h2", { text: ids.length + " ta lidni boshqa ofisga o‘tkazish" }),
+        h("p", { class: "hint", text: "Lidlar menejerdan olinadi va tanlangan ofisning \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi." }),
+        h("label", { text: "Qaysi ofisga" }), offSel,
+        h("div", { class: "picker" }, h("label", null, asNew, "\"Yangi lid\" bosqichiga o‘tkazish")),
+        err,
+        h("div", { class: "row" },
+          h("button", { class: "btn line", text: "Bekor", onclick: close }),
+          h("button", {
+            class: "btn", text: "O‘tkazish",
+            onclick: async function (e) {
+              var to = Number(offSel.value);
+              var move = ids.filter(function (id) {
+                for (var i = 0; i < list.rows.length; i++) if (list.rows[i].id === id) return list.rows[i].office_id !== to;
+                return true;
+              });
+              if (!move.length) { err.textContent = "Tanlangan lidlar allaqachon shu ofisda"; return; }
+              var fields = { office_id: to, manager_id: null };
+              if (asNew.checked) { fields.stage = "new"; fields.next_call_at = null; }
+              e.target.disabled = true;
+              var done = 0;
+              for (var i = 0; i < move.length; i += 200) {
+                var r = await sb.from("leads").update(fields).in("id", move.slice(i, i + 200)).select("id");
+                if (r.error) { err.textContent = errText(r.error); e.target.disabled = false; return; }
+                done += r.data.length;
+              }
+              close();
+              toast(done + " ta lid " + officeName(to) + " ofisiga o‘tkazildi");
+              list.selecting = false; list.selected = {};
+              renderTab(false);
+            }
+          }))
+      ];
+    });
   }
 
   // Selected leads go back to the admin pool ("Taqsimlanmagan") as new leads; note and history are kept.
@@ -754,6 +805,10 @@
         (office == null ? " · " + officeName(m.office_id) : "")) };
     });
     var daysInp = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0 — hammasi", oninput: debounce(refresh, 400) });
+    // super admin may send the returned leads to another office's pool
+    var toOffSel = me.role === "super" && offices.length > 1 ? h("select", null,
+      h("option", { value: "", text: "O‘z ofisida qoladi" }),
+      offices.map(function (o) { return h("option", { value: o.id, text: o.name + " ofisiga o‘tkazish" }); })) : null;
     var countEl = h("p", { class: "hint" });
     var err = h("div", { class: "err" });
     var expBtn = h("button", { class: "btn ghost block", text: "Excel’ga yuklab olish", onclick: doExport });
@@ -832,10 +887,16 @@
     function askMove() {
       var c = chosen(); if (invalid(c)) return;
       var mErr = h("div", { class: "err" });
+      var fields = Object.assign({}, BACK_TO_POOL);
+      var where = "\"Taqsimlanmagan\" bo‘limiga tushadi";
+      if (toOffSel && toOffSel.value) {
+        fields.office_id = Number(toOffSel.value);
+        where = officeName(fields.office_id) + " ofisining \"Taqsimlanmagan\" bo‘limiga tushadi";
+      }
       modal(function (close) {
         return [
           h("h2", { text: "Yangi lid qilib qaytarish" }),
-          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi, \"Yangi lid\" bosqichiga o‘tadi va \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi. Keyin \"Lidlar → Taqsimlanmagan → Tanlash\" orqali qayta taqsimlaysiz." }),
+          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi, \"Yangi lid\" bosqichiga o‘tadi va " + where + ". Izoh va tarix saqlanadi. Keyin \"Lidlar → Taqsimlanmagan → Tanlash\" orqali qayta taqsimlaysiz." }),
           mErr,
           h("div", { class: "row" },
             h("button", { class: "btn line", text: "Bekor", onclick: close }),
@@ -843,10 +904,10 @@
               class: "btn", text: "Ha, qaytarish",
               onclick: async function (e) {
                 e.target.disabled = true;
-                var r = await apply(sb.from("leads").update(BACK_TO_POOL), c).select("id");
+                var r = await apply(sb.from("leads").update(fields), c).select("id");
                 if (r.error) { mErr.textContent = errText(r.error); e.target.disabled = false; return; }
                 close();
-                toast(r.data.length + " ta lid \"Taqsimlanmagan\"ga qaytarildi");
+                toast(r.data.length + " ta lid " + (fields.office_id ? officeName(fields.office_id) + " ofisiga o‘tkazildi" : "\"Taqsimlanmagan\"ga qaytarildi"));
                 refresh();
               }
             }))
@@ -862,6 +923,7 @@
       h("label", { text: "Menejerlar" }),
       h("div", { class: "picker" }, h("label", null, allCb, h("b", { text: "Barcha menejerlar" })), mgrBoxes.map(function (b) { return b.el; })),
       h("label", { text: "Necha kundan beri o‘zgarmagan (ixtiyoriy)" }), daysInp,
+      toOffSel ? [h("label", { text: "Qaytarilgan lidlar qayerga tushsin" }), toOffSel] : null,
       countEl, err, expBtn, moveBtn));
     refresh();
   }
