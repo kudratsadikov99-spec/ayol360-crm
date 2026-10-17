@@ -14,6 +14,9 @@
   var STAGE_NAME = {};
   STAGES.forEach(function (s) { STAGE_NAME[s[0]] = s[1]; });
   var FREE = "_free";            // admin-only chip: leads without a manager
+  var RECYCLE_STAGES = ["no_answer", "thinking"];   // pre-checked on the "Qayta ishlash" tab
+  var BACK_TO_POOL = { stage: "new", manager_id: null, next_call_at: null };
+  var XLSX_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
   var PAGE = 50;
   var LOGIN_DOMAIN = "@ayol360.uz";
 
@@ -205,7 +208,7 @@
   var mainEl, topEl;
   function tabsFor() {
     var t = [["leads", "Lidlar"]];
-    if (isAdmin()) t.push(["import", "Yuklash"], ["staff", "Xodimlar"]);
+    if (isAdmin()) t.push(["recycle", "Qayta ishlash"], ["import", "Yuklash"], ["staff", "Xodimlar"]);
     t.push(["stats", "Statistika"]);
     return t;
   }
@@ -264,6 +267,7 @@
   function renderTab(reset) {
     var bar = document.querySelector(".bar"); if (bar) bar.remove();
     clear(mainEl);
+    if (ui.tab === "recycle" && isAdmin()) return renderRecycle();
     if (ui.tab === "import" && isAdmin()) return renderImport();
     if (ui.tab === "staff" && isAdmin()) return renderStaff();
     if (ui.tab === "stats") return renderStats();
@@ -455,7 +459,39 @@
         onclick: function () { list.rows.forEach(function (r) { list.selected[r.id] = true; }); drawList(); }
       }),
       h("div", { class: "grow", text: n + " ta tanlandi" }),
+      ui.stage === FREE ? null : h("button", { class: "btn line", text: "Qaytarish", disabled: !n, onclick: returnSelected }),
       h("button", { class: "btn", text: "Menejerga berish", disabled: !n, onclick: openDistribute })));
+  }
+
+  // Selected leads go back to the admin pool ("Taqsimlanmagan") as new leads; note and history are kept.
+  function returnSelected() {
+    var ids = Object.keys(list.selected).map(Number);
+    var err = h("div", { class: "err" });
+    modal(function (close) {
+      return [
+        h("h2", { text: ids.length + " ta lidni qaytarish" }),
+        h("p", { class: "hint", text: "Tanlangan lidlar menejerdan olinadi, \"Yangi lid\" bosqichiga o‘tadi va \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi." }),
+        err,
+        h("div", { class: "row" },
+          h("button", { class: "btn line", text: "Bekor", onclick: close }),
+          h("button", {
+            class: "btn", text: "Qaytarish",
+            onclick: async function (e) {
+              e.target.disabled = true;
+              var done = 0;
+              for (var i = 0; i < ids.length; i += 200) {
+                var r = await sb.from("leads").update(BACK_TO_POOL).in("id", ids.slice(i, i + 200)).select("id");
+                if (r.error) { err.textContent = errText(r.error); e.target.disabled = false; return; }
+                done += r.data.length;
+              }
+              close();
+              toast(done + " ta lid qaytarildi");
+              list.selecting = false; list.selected = {};
+              renderTab(false);
+            }
+          }))
+      ];
+    });
   }
 
   function openDistribute() {
@@ -695,6 +731,141 @@
     document.body.appendChild(wrap);
   }
 
+  // ---------------- recycle: managers' stalled leads back to the pool ----------------
+  function renderRecycle() {
+    var office = activeOffice();
+    var stageBoxes = STAGES.filter(function (s) { return s[0] !== "new"; }).map(function (s) {
+      var cb = h("input", { type: "checkbox", value: s[0], checked: RECYCLE_STAGES.indexOf(s[0]) >= 0, onchange: refresh });
+      return { cb: cb, el: h("label", null, cb, s[1]) };
+    });
+    // all managers of the office, including switched-off ones: their leads must not get stuck
+    var mgrs = staff.filter(function (s) { return s.role === "manager" && (office == null || s.office_id === office); });
+    var mgrBoxes = [];
+    var allCb = h("input", {
+      type: "checkbox", checked: true,
+      onchange: function () { mgrBoxes.forEach(function (b) { b.cb.checked = allCb.checked; }); refresh(); }
+    });
+    mgrBoxes = mgrs.map(function (m) {
+      var cb = h("input", {
+        type: "checkbox", value: m.id, checked: true,
+        onchange: function () { allCb.checked = mgrBoxes.every(function (b) { return b.cb.checked; }); refresh(); }
+      });
+      return { cb: cb, el: h("label", null, cb, (m.full_name || m.email) + (m.active ? "" : " (o‘chiq)") +
+        (office == null ? " · " + officeName(m.office_id) : "")) };
+    });
+    var daysInp = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0 — hammasi", oninput: debounce(refresh, 400) });
+    var countEl = h("p", { class: "hint" });
+    var err = h("div", { class: "err" });
+    var expBtn = h("button", { class: "btn ghost block", text: "Excel’ga yuklab olish", onclick: doExport });
+    var moveBtn = h("button", { class: "btn block", text: "Yangi lid qilib qaytarish", onclick: askMove });
+
+    function chosen() {
+      return {
+        stages: stageBoxes.filter(function (b) { return b.cb.checked; }).map(function (b) { return b.cb.value; }),
+        all: allCb.checked,
+        mgrs: mgrBoxes.filter(function (b) { return b.cb.checked; }).map(function (b) { return b.cb.value; }),
+        days: Math.max(0, Number(daysInp.value) || 0)
+      };
+    }
+    function invalid(c) {
+      if (!c.stages.length) return "Kamida bitta bosqich tanlang";
+      if (!c.all && !c.mgrs.length) return "Kamida bitta menejer tanlang";
+      return "";
+    }
+    function apply(q, c) {
+      if (office != null) q = q.eq("office_id", office);
+      q = q.in("stage", c.stages);
+      q = c.all ? q.not("manager_id", "is", null) : q.in("manager_id", c.mgrs);
+      if (c.days > 0) q = q.lt("updated_at", new Date(Date.now() - c.days * 864e5).toISOString());
+      return q;
+    }
+
+    var seq = 0;
+    async function refresh() {
+      var c = chosen(), bad = invalid(c), my = ++seq;
+      err.textContent = bad;
+      expBtn.disabled = moveBtn.disabled = true;
+      clear(countEl);
+      if (bad) return;
+      countEl.textContent = "Hisoblanmoqda…";
+      var r = await apply(sb.from("leads").select("id", { count: "exact", head: true }), c);
+      if (my !== seq) return;
+      clear(countEl);
+      if (r.error) { err.textContent = errText(r.error); return; }
+      countEl.appendChild(h("b", { text: (r.count || 0) + " ta lid" }));
+      countEl.appendChild(document.createTextNode(" shu shartlarga mos keladi"));
+      expBtn.disabled = moveBtn.disabled = !r.count;
+    }
+
+    async function doExport() {
+      var c = chosen(); if (invalid(c)) return;
+      var label = expBtn.textContent;
+      expBtn.disabled = true; err.textContent = "";
+      try {
+        var rows = [];
+        for (var from = 0; ; from += 1000) {
+          expBtn.textContent = "Yuklanmoqda… " + rows.length;
+          var r = await apply(sb.from("leads").select("id,name,phone,stage,manager_id,office_id,updated_at,note"), c)
+            .order("id").range(from, from + 999);
+          if (r.error) throw r.error;
+          rows = rows.concat(r.data);
+          if (r.data.length < 1000) break;
+        }
+        await loadScript(XLSX_URL);
+        // every cell is a string: phone numbers must stay text, otherwise Excel turns them into 9.98E+11
+        var aoa = [["Ism", "Telefon", "Bosqich", "Menejer", "Ofis", "Oxirgi o‘zgarish", "Izoh"]].concat(rows.map(function (x) {
+          return [x.name || "", String(x.phone || ""), STAGE_NAME[x.stage] || x.stage, staffName(x.manager_id) || "",
+            officeName(x.office_id), fmtDate(x.updated_at), x.note || ""];
+        }));
+        var ws = window.XLSX.utils.aoa_to_sheet(aoa);
+        ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 40 }];
+        var wb = window.XLSX.utils.book_new();
+        window.XLSX.utils.book_append_sheet(wb, ws, "Lidlar");
+        var d = new Date();
+        window.XLSX.writeFile(wb, "ayol360-qayta-ishlash-" + d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate() + ".xlsx");
+        toast(rows.length + " ta raqam yuklab olindi");
+      } catch (e) { err.textContent = errText(e); }
+      expBtn.textContent = label;
+      expBtn.disabled = false;
+    }
+
+    function askMove() {
+      var c = chosen(); if (invalid(c)) return;
+      var mErr = h("div", { class: "err" });
+      modal(function (close) {
+        return [
+          h("h2", { text: "Yangi lid qilib qaytarish" }),
+          h("p", { class: "hint", text: countEl.textContent + ". Ular menejerlardan olinadi, \"Yangi lid\" bosqichiga o‘tadi va \"Taqsimlanmagan\" bo‘limiga tushadi. Izoh va tarix saqlanadi. Keyin \"Lidlar → Taqsimlanmagan → Tanlash\" orqali qayta taqsimlaysiz." }),
+          mErr,
+          h("div", { class: "row" },
+            h("button", { class: "btn line", text: "Bekor", onclick: close }),
+            h("button", {
+              class: "btn", text: "Ha, qaytarish",
+              onclick: async function (e) {
+                e.target.disabled = true;
+                var r = await apply(sb.from("leads").update(BACK_TO_POOL), c).select("id");
+                if (r.error) { mErr.textContent = errText(r.error); e.target.disabled = false; return; }
+                close();
+                toast(r.data.length + " ta lid \"Taqsimlanmagan\"ga qaytarildi");
+                refresh();
+              }
+            }))
+        ];
+      });
+    }
+
+    mainEl.appendChild(h("div", { class: "box" },
+      h("h3", { text: "Qayta ishlash" }),
+      h("p", { class: "hint", text: "Menejerlarda qolib ketgan lidlarni Excel’ga yuklab oling yoki to‘g‘ridan-to‘g‘ri \"Taqsimlanmagan\" bo‘limiga yangi lid qilib qaytaring." }),
+      h("label", { text: "Bosqichlar" }),
+      h("div", { class: "picker" }, stageBoxes.map(function (b) { return b.el; })),
+      h("label", { text: "Menejerlar" }),
+      h("div", { class: "picker" }, h("label", null, allCb, h("b", { text: "Barcha menejerlar" })), mgrBoxes.map(function (b) { return b.el; })),
+      h("label", { text: "Necha kundan beri o‘zgarmagan (ixtiyoriy)" }), daysInp,
+      countEl, err, expBtn, moveBtn));
+    refresh();
+  }
+
   // ---------------- import ----------------
   function renderImport() {
     var office = activeOffice();
@@ -784,7 +955,7 @@
         return parseCsv(text.replace(/^﻿/, ""));
       });
     }
-    return loadScript("https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js").then(function () {
+    return loadScript(XLSX_URL).then(function () {
       return f.arrayBuffer().then(function (buf) {
         var wb = window.XLSX.read(buf, { type: "array" });
         var ws = wb.Sheets[wb.SheetNames[0]];
