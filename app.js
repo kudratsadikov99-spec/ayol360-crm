@@ -1038,7 +1038,7 @@
     var out = h("div");
     mainEl.appendChild(h("div", { class: "box" },
       h("h3", { text: "Lid yuklash (Excel yoki CSV)" }),
-      h("p", { class: "hint", text: "Fayl ichida ism va telefon ustuni bo‘lsin. Takroriy raqamlar o‘tkazib yuboriladi. Yuklangan lidlar \"Yangi lid\" bo‘limiga menejersiz tushadi." }),
+      h("p", { class: "hint", text: "Fayl ichida ism va telefon ustuni bo‘lsin. Takroriy raqamlar ham qo‘shiladi. Yuklangan lidlar \"Yangi lid\" bo‘limiga menejersiz tushadi." }),
       offSel ? [h("label", { text: "Qaysi ofisga" }), offSel] : null,
       h("label", { text: "Manba" }), source,
       h("label", { text: "Fayl" }), file,
@@ -1099,7 +1099,7 @@
         }
         btn.textContent = "Tayyor";
         clear(res).appendChild(h("p", null, h("b", { text: added + " ta yangi lid qo‘shildi. " }),
-          skipped + " ta qator o‘tkazib yuborildi (takroriy yoki noto‘g‘ri raqam)."));
+          skipped + " ta qator o‘tkazib yuborildi (noto‘g‘ri raqam)."));
         toast("Yuklandi: " + added);
       };
     }
